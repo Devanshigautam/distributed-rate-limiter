@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: distributed-rate-limiter
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+management:
+  endpoint:
+    health:
+      show-details: always
+
+ratelimit:
+  fail-open: true
+  default-tier: free
+  default-rule:
+    capacity: 5
+    refill-per-second: 1
+  clients:
+    devanshi: free
+    priya: premium
+  rules:
+    - tier: free
+      endpoint: /api/orders
+      capacity: 10
+      refill-per-second: 1
+    - tier: premium
+      endpoint: /api/orders
+      capacity: 100
+      refill-per-second: 50
