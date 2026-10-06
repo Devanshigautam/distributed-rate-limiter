@@ -1,6 +1,28 @@
 services:
+  # Always started: `docker compose up -d`
   redis:
     image: redis:7
     container_name: rl-redis
     ports:
       - "6379:6379"
+
+  # Only with the "cluster" profile:
+  #   docker compose --profile cluster up -d --build --scale app=3
+  app:
+    profiles: [ cluster ]
+    build: .
+    environment:
+      SPRING_DATA_REDIS_HOST: redis      # every copy talks to the SAME Redis
+    mem_limit: 384m
+    depends_on:
+      - redis
+
+  lb:
+    profiles: [ cluster ]
+    image: nginx:1.27-alpine
+    ports:
+      - "8000:80"                        # send requests to http://localhost:8000
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app

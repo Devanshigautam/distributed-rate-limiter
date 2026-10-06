@@ -24,7 +24,7 @@ public class SlidingWindowLimiter implements RateLimiter {
     public SlidingWindowLimiter(StringRedisTemplate redis,
                                 @Qualifier("slidingWindowScript") DefaultRedisScript<List> script) {
         this.redis = redis;
-        this.script = script;git add .
+        this.script = script;
     }
 
     @Override
