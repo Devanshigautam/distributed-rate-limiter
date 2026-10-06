@@ -15,15 +15,15 @@ class RuleResolverTest {
     private final RuleResolver resolver = new RuleResolver(new RateLimitProperties(
             true,
             "free",
-            new RateLimitProperties.RuleConfig(5, 1),
+            new RateLimitProperties.RuleConfig(5, 1, Algorithm.TOKEN_BUCKET),
             Map.of("devanshi", "free", "priya", "premium"),
             List.of(
-                    new RateLimitProperties.EndpointRule("free", "/api/orders", 10, 1),
-                    new RateLimitProperties.EndpointRule("premium", "/api/orders", 100, 50))));
+                    new RateLimitProperties.EndpointRule("free", "/api/orders", 10, 1, Algorithm.TOKEN_BUCKET),
+                    new RateLimitProperties.EndpointRule("premium", "/api/orders", 100, 50, Algorithm.SLIDING_WINDOW))));
 
     @Test
-    void knownClientGetsTheirTiersRule() {
-        assertEquals(new RateLimitRule(100, 50), resolver.resolve("priya", "/api/orders"));
+    void knownClientGetsTheirTiersRuleAndAlgorithm() {
+        assertEquals(new RateLimitRule(100, 50, Algorithm.SLIDING_WINDOW), resolver.resolve("priya", "/api/orders"));
     }
 
     @Test
@@ -35,5 +35,11 @@ class RuleResolverTest {
     @Test
     void unknownEndpointUsesDefaultRule() {
         assertEquals(new RateLimitRule(5, 1), resolver.resolve("devanshi", "/api/unknown"));
+    }
+
+    @Test
+    void slidingWindowLengthKeepsTheSameAverageRate() {
+        // 100 requests at 50/sec  ->  100 requests per 2 seconds
+        assertEquals(2000, new RateLimitRule(100, 50, Algorithm.SLIDING_WINDOW).windowMs());
     }
 }

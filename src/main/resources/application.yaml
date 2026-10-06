@@ -11,21 +11,37 @@ management:
     health:
       show-details: always
 
+# ---------------- Rate limiter settings ----------------
 ratelimit:
+  # If Redis is down: true = let requests through (keep the API up),
+  #                   false = block them with 503 (protect the server)
   fail-open: true
+
+  # Tier used for any client not listed under "clients"
   default-tier: free
+
+  # Rule used when no specific rule matches the client's tier + endpoint
   default-rule:
     capacity: 5
     refill-per-second: 1
+
+  # Which tier each client belongs to (client id comes from the X-Client-Id header)
   clients:
     devanshi: free
     priya: premium
+
+  # Rules per tier and endpoint.
+  # capacity = bucket size (max burst), refill-per-second = tokens added back each second
+  # algorithm = token-bucket (default) or sliding-window
+  #   sliding-window allows "capacity" requests per window of capacity / refill-per-second seconds
   rules:
     - tier: free
       endpoint: /api/orders
+      algorithm: token-bucket
       capacity: 10
       refill-per-second: 1
     - tier: premium
       endpoint: /api/orders
+      algorithm: sliding-window     # 100 requests per 2-second window
       capacity: 100
       refill-per-second: 50

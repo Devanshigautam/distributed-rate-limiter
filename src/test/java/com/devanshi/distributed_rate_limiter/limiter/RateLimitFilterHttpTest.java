@@ -49,6 +49,15 @@ class RateLimitFilterHttpTest extends RedisTestBase {
     }
 
     @Test
+    void premiumClientUsesSlidingWindowWithHigherLimit() throws Exception {
+        for (int i = 1; i <= 15; i++) {
+            HttpResponse<String> ok = get("/api/orders", "priya");   // premium -> sliding window, 100 per 2 s
+            assertEquals(200, ok.statusCode(), "request " + i);
+            assertEquals("100", ok.headers().firstValue("X-RateLimit-Limit").orElseThrow());
+        }
+    }
+
+    @Test
     void missingClientIdIsRejected() throws Exception {
         assertEquals(400, get("/api/orders", null).statusCode());
     }

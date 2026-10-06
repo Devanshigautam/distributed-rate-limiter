@@ -11,6 +11,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Runs before every /api/** request and decides: let it through, or reply 429.
@@ -22,13 +25,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
     static final String CLIENT_HEADER = "X-Client-Id";
 
     private final RuleResolver ruleResolver;
-    private final RateLimiter rateLimiter;
+    private final Map<Algorithm, RateLimiter> limiters = new EnumMap<>(Algorithm.class);
     private final RateLimitProperties properties;
 
-    public RateLimitFilter(RuleResolver ruleResolver, RateLimiter rateLimiter, RateLimitProperties properties) {
+    /** Spring passes in every RateLimiter bean; we index them by algorithm. */
+    public RateLimitFilter(RuleResolver ruleResolver, List<RateLimiter> limiters, RateLimitProperties properties) {
         this.ruleResolver = ruleResolver;
-        this.rateLimiter = rateLimiter;
         this.properties = properties;
+        for (RateLimiter limiter : limiters) {
+            this.limiters.put(limiter.algorithm(), limiter);
+        }
     }
 
     /** Only limit the API; health checks (/actuator) are never limited. */
@@ -52,7 +58,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // 2. Which rule applies?
         String endpoint = request.getRequestURI();
         RateLimitRule rule = ruleResolver.resolve(clientId, endpoint);
-        String key = "rl:tb:" + clientId + ":" + endpoint;
+        String key = "rl:" + rule.algorithm().keyPrefix() + ":" + clientId + ":" + endpoint;
+        RateLimiter rateLimiter = limiters.get(rule.algorithm());
+        if (rateLimiter == null) {
+            throw new IllegalStateException("No limiter registered for " + rule.algorithm());
+        }
 
         // 3. Ask Redis
         Decision decision;

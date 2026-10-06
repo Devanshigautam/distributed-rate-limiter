@@ -2,9 +2,12 @@ package com.devanshi.distributed_rate_limiter.limiter;
 
 /**
  * Anything that can decide allow / deny for a key under a rule.
- * Week 1 has one implementation (token bucket); Week 2 adds a sliding window.
+ * One implementation per algorithm: TokenBucketLimiter, SlidingWindowLimiter.
  */
 public interface RateLimiter {
+
+    /** Which algorithm this limiter implements. */
+    Algorithm algorithm();
 
     Decision check(String key, RateLimitRule rule);
 }

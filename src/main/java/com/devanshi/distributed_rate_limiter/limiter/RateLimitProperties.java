@@ -28,23 +28,27 @@ public record RateLimitProperties(
         rules = rules == null ? List.of() : rules;
     }
 
-    /** A capacity + refill pair, as written in the YAML. */
-    public record RuleConfig(@Positive long capacity, @Positive double refillPerSecond) {
+    /** A capacity + refill pair (+ algorithm), as written in the YAML. */
+    public record RuleConfig(
+            @Positive long capacity,
+            @Positive double refillPerSecond,
+            @DefaultValue("token-bucket") Algorithm algorithm) {
 
         public RateLimitRule toRule() {
-            return new RateLimitRule(capacity, refillPerSecond);
+            return new RateLimitRule(capacity, refillPerSecond, algorithm);
         }
     }
 
-    /** One line of the "rules:" list: tier + endpoint + limit. */
+    /** One line of the "rules:" list: tier + endpoint + limit + algorithm. */
     public record EndpointRule(
             @NotBlank String tier,
             @NotBlank String endpoint,
             @Positive long capacity,
-            @Positive double refillPerSecond) {
+            @Positive double refillPerSecond,
+            @DefaultValue("token-bucket") Algorithm algorithm) {
 
         public RateLimitRule toRule() {
-            return new RateLimitRule(capacity, refillPerSecond);
+            return new RateLimitRule(capacity, refillPerSecond, algorithm);
         }
     }
 }

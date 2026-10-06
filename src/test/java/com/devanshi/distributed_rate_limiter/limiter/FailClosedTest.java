@@ -1,0 +1,59 @@
+package com.devanshi.distributed_rate_limiter.limiter;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.utility.DockerImageName;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+/**
+ * The opposite of FailOpenTest: with fail-open: false, a Redis outage
+ * must block requests with 503 to protect what's behind the API.
+ */
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {"ratelimit.fail-open=false", "spring.data.redis.timeout=500ms"})
+class FailClosedTest {
+
+    @SuppressWarnings("resource")
+    static final GenericContainer<?> REDIS =
+            new GenericContainer<>(DockerImageName.parse("redis:7")).withExposedPorts(6379);
+
+    static {
+        REDIS.start();
+    }
+
+    @DynamicPropertySource
+    static void redisProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.data.redis.host", REDIS::getHost);
+        registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
+    }
+
+    @Value("${local.server.port}")
+    private int port;
+
+    @Test
+    void requestsAreBlockedWith503WhenRedisIsDown() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/orders"))
+                .header("X-Client-Id", "devanshi")
+                .build();
+
+        assertEquals(200, http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode(),
+                "works normally while Redis is up");
+
+        REDIS.stop();   // simulate Redis going down
+
+        assertEquals(503, http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode(),
+                "fail-closed: 503 with Redis down");
+    }
+}
