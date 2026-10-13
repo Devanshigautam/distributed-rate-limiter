@@ -66,6 +66,39 @@ Windows (Command Prompt):
 for /L %i in (1,1,15) do @curl.exe -s -o NUL -w "%{http_code} " -H "X-Client-Id: devanshi" http://localhost:8080/api/orders
 ```
 
+## Run 3 instances behind a load balancer
+
+The real test of a *distributed* limiter: several app instances, one shared limit.
+
+```
+                         ┌──▶ app copy 1 ──┐
+requests ─▶ Nginx :8000 ─┼──▶ app copy 2 ──┼──▶ one Redis (one shared bucket)
+           (round-robin) └──▶ app copy 3 ──┘
+```
+
+```bash
+docker compose --profile cluster up -d --build --scale app=3   # build the image, start 3 copies + Nginx
+powershell -ExecutionPolicy Bypass -File .\scripts\scale-test.ps1   # Windows: 30 requests through Nginx
+docker compose --profile cluster down                          # stop everything
+```
+
+Measured result (laptop, free-tier client: bucket 10, refill 1/sec):
+
+```
+Sent:     30 requests in 3.9 s
+Allowed:  12   (expected about 13 for ONE shared bucket)
+Blocked:  18
+
+Allowed requests per app copy:
+  3119fecd7546  4
+  c86354cfde46  4
+  d72fe7cd94a9  4
+```
+
+All three instances served requests, and together they allowed 12, the shared bucket's 10 plus about 2 refilled during the run. If each instance counted in its own memory, the client would have got about 30.
+
+The image is built with a multi-stage `Dockerfile` (compile on the JDK, run the jar on a slim JRE). Each container finds Redis by its Compose service name via `SPRING_DATA_REDIS_HOST=redis`, and the `cluster` profile keeps the plain `docker compose up -d` to Redis only for local development.
+
 ## Configuration
 
 Limits live in `application.yaml`, so they change without code changes:
@@ -153,14 +186,17 @@ src/main/resources/
   scripts/token_bucket.lua   the atomic token bucket
   scripts/sliding_window.lua the atomic sliding window log
   application.yaml           Redis address + rate limit rules
-docker-compose.yml           Redis for local development
+docker-compose.yml           Redis; plus 3 app copies + Nginx with --profile cluster
+Dockerfile                   multi-stage build: JDK to compile, JRE to run
+nginx/nginx.conf             round-robin load balancer in front of the app copies
+scripts/scale-test.ps1       sends requests through Nginx, reports allowed/blocked per copy
 ```
 
 ## Tradeoffs and next steps
 
 - **At 100× the load:** Redis Cluster, with keys hash-tagged (`rl:tb:{client}:...`) so one client's bucket stays on one shard. Optionally a small local pre-check to skip Redis for clients far below their limit, trading exactness for latency.
 - **Across regions:** per-region limits with async sync, accepting a bounded overshoot.
-- **Planned:** multiple instances behind a load balancer; Prometheus metrics and a Grafana dashboard; k6 load tests with measured latency and accuracy in a `BENCHMARKS.md`.
+- **Planned:** Prometheus metrics and a Grafana dashboard; k6 load tests with measured latency and accuracy in a `BENCHMARKS.md`.
 
 ## Limitations
 

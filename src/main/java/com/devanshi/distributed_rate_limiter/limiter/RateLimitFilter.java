@@ -1,5 +1,8 @@
 package com.devanshi.distributed_rate_limiter.limiter;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,11 +30,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final RuleResolver ruleResolver;
     private final Map<Algorithm, RateLimiter> limiters = new EnumMap<>(Algorithm.class);
     private final RateLimitProperties properties;
+    private final MeterRegistry meters;
 
     /** Spring passes in every RateLimiter bean; we index them by algorithm. */
-    public RateLimitFilter(RuleResolver ruleResolver, List<RateLimiter> limiters, RateLimitProperties properties) {
+    public RateLimitFilter(RuleResolver ruleResolver, List<RateLimiter> limiters,
+                           RateLimitProperties properties, MeterRegistry meters) {
         this.ruleResolver = ruleResolver;
         this.properties = properties;
+        this.meters = meters;
         for (RateLimiter limiter : limiters) {
             this.limiters.put(limiter.algorithm(), limiter);
         }
@@ -64,11 +70,18 @@ public class RateLimitFilter extends OncePerRequestFilter {
             throw new IllegalStateException("No limiter registered for " + rule.algorithm());
         }
 
-        // 3. Ask Redis
+        String tier = ruleResolver.tierFor(clientId);
+        String algorithm = rule.algorithm().name().toLowerCase();
+
+        // 3. Ask Redis, and time how long the check takes
         Decision decision;
+        Timer.Sample sample = Timer.start(meters);
         try {
             decision = rateLimiter.check(key, rule);
+            sample.stop(checkTimer(algorithm, "ok"));
         } catch (DataAccessException e) {
+            sample.stop(checkTimer(algorithm, "error"));
+            countDecision(properties.failOpen() ? "fail_open" : "fail_closed", tier, algorithm);
             if (properties.failOpen()) {
                 log.warn("Redis unavailable, failing OPEN for {}", key);
                 chain.doFilter(request, response);
@@ -84,6 +97,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
         response.setHeader("X-RateLimit-Limit", String.valueOf(rule.capacity()));
         response.setHeader("X-RateLimit-Remaining", String.valueOf(decision.remaining()));
 
+        countDecision(decision.allowed() ? "allowed" : "denied", tier, algorithm);
+
         if (decision.allowed()) {
             chain.doFilter(request, response);
         } else {
@@ -92,6 +107,30 @@ public class RateLimitFilter extends OncePerRequestFilter {
             writeJson(response, 429,
                     "{\"error\":\"Too Many Requests\",\"retryAfterMs\":" + decision.retryAfterMs() + "}");
         }
+    }
+
+    /**
+     * ratelimit_check_seconds: how long the Redis/Lua check took.
+     * The percentile histogram lets Prometheus compute p50/p95/p99 across all instances.
+     */
+    private Timer checkTimer(String algorithm, String outcome) {
+        return Timer.builder("ratelimit.check")
+                .description("Time spent running the rate limit check in Redis")
+                .tag("algorithm", algorithm)
+                .tag("outcome", outcome)
+                .publishPercentileHistogram()
+                .register(meters);
+    }
+
+    /** ratelimit_decisions_total{result, tier, algorithm}: every allow / deny / fail-open / fail-closed. */
+    private void countDecision(String result, String tier, String algorithm) {
+        Counter.builder("ratelimit.decisions")
+                .description("Rate limit decisions")
+                .tag("result", result)
+                .tag("tier", tier)
+                .tag("algorithm", algorithm)
+                .register(meters)
+                .increment();
     }
 
     private static void writeJson(HttpServletResponse response, int status, String body) throws IOException {

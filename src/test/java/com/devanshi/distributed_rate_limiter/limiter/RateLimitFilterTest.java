@@ -1,5 +1,6 @@
 package com.devanshi.distributed_rate_limiter.limiter;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.mock.web.MockFilterChain;
@@ -31,9 +32,16 @@ class RateLimitFilterTest {
                 new RateLimitProperties.RuleConfig(5, 1, Algorithm.TOKEN_BUCKET), Map.of(), List.of());
     }
 
-    private static RateLimitFilter filterWith(RateLimiter limiter, boolean failOpen) {
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
+    private RateLimitFilter filterWith(RateLimiter limiter, boolean failOpen) {
         RateLimitProperties props = properties(failOpen);
-        return new RateLimitFilter(new RuleResolver(props), List.of(limiter), props);
+        return new RateLimitFilter(new RuleResolver(props), List.of(limiter), props, meters);
+    }
+
+    private double decisions(String result) {
+        var counter = meters.find("ratelimit.decisions").tag("result", result).counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private static RateLimiter fakeLimiter() {
@@ -77,6 +85,22 @@ class RateLimitFilterTest {
         assertEquals(429, response.getStatus());
         assertEquals("2", response.getHeader("Retry-After"));   // 1500 ms rounds UP to 2 s
         assertNull(chain.getRequest(), "request must not reach the controller");
+    }
+
+    @Test
+    void everyDecisionIsCountedAndTimed() throws Exception {
+        RateLimiter limiter = fakeLimiter();
+        when(limiter.check(anyString(), any()))
+                .thenReturn(new Decision(true, 1, 0))
+                .thenReturn(new Decision(false, 0, 500));
+        RateLimitFilter filter = filterWith(limiter, true);
+
+        filter.doFilter(apiRequest("devanshi"), new MockHttpServletResponse(), new MockFilterChain());
+        filter.doFilter(apiRequest("devanshi"), new MockHttpServletResponse(), new MockFilterChain());
+
+        assertEquals(1, decisions("allowed"));
+        assertEquals(1, decisions("denied"));
+        assertEquals(2, meters.find("ratelimit.check").timer().count(), "both Redis checks should be timed");
     }
 
     @Test
